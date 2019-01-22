@@ -351,9 +351,11 @@ trait IssuesService {
     implicit s: Session
   ) =
     Issues filter { t1 =>
-      repos
-        .map { case (owner, repository) => t1.byRepository(owner, repository) }
-        .foldLeft[Rep[Boolean]](false)(_ || _) &&
+      (if (repos.size == 1) {
+         t1.byRepository(repos.head._1, repos.head._2)
+       } else {
+         ((t1.userName ++ "/" ++ t1.repositoryName) inSetBind (repos.map { case (owner, repo) => s"$owner/$repo" }))
+       }) &&
       (t1.closed === (condition.state == "closed").bind) &&
       (t1.milestoneId.? isEmpty, condition.milestone == Some(None)) &&
       (t1.priorityId.? isEmpty, condition.priority == Some(None)) &&
@@ -473,6 +475,25 @@ trait IssuesService {
     IssueLabels filter (_.byPrimaryKey(owner, repository, issueId, labelId)) delete
   }
 
+  def deleteAllIssueLabels(owner: String, repository: String, issueId: Int, insertComment: Boolean = false)(
+    implicit context: Context,
+    s: Session
+  ): Int = {
+    if (insertComment) {
+      IssueComments insert IssueComment(
+        userName = owner,
+        repositoryName = repository,
+        issueId = issueId,
+        action = "delete_label",
+        commentedUserName = context.loginAccount.map(_.userName).getOrElse("Unknown user"),
+        content = "All labels",
+        registeredDate = currentDate,
+        updatedDate = currentDate
+      )
+    }
+    IssueLabels filter (_.byIssue(owner, repository, issueId)) delete
+  }
+
   def createComment(
     owner: String,
     repository: String,
@@ -503,6 +524,15 @@ trait IssuesService {
         (t.title, t.content.?, t.updatedDate)
       }
       .update(title, content, currentDate)
+  }
+
+  def changeIssueToPullRequest(owner: String, repository: String, issueId: Int)(implicit s: Session) = {
+    Issues
+      .filter(_.byPrimaryKey(owner, repository, issueId))
+      .map { t =>
+        t.pullRequest
+      }
+      .update(true)
   }
 
   def updateAssignedUserName(
