@@ -15,6 +15,7 @@ class ApiController
     with ApiIssueLabelControllerBase
     with ApiOrganizationControllerBase
     with ApiPullRequestControllerBase
+    with ApiReleaseControllerBase
     with ApiRepositoryBranchControllerBase
     with ApiRepositoryCollaboratorControllerBase
     with ApiRepositoryCommitControllerBase
@@ -31,7 +32,9 @@ class ApiController
     with PullRequestService
     with CommitsService
     with CommitStatusService
+    with ReleaseService
     with RepositoryCreationService
+    with RepositoryCommitFileService
     with IssueCreationService
     with HandleCommentService
     with MergeService

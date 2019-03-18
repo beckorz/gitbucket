@@ -14,6 +14,7 @@ import gitbucket.core.util.SyntaxSugars._
 import gitbucket.core.util.Implicits._
 import gitbucket.core.util.Directory._
 import gitbucket.core.model.{Account, CommitState, CommitStatus}
+import gitbucket.core.util.JGitUtil.CommitInfo
 import gitbucket.core.view
 import gitbucket.core.view.helpers
 import org.apache.commons.compress.archivers.{ArchiveEntry, ArchiveOutputStream}
@@ -29,8 +30,10 @@ import org.eclipse.jgit.api.{ArchiveCommand, Git}
 import org.eclipse.jgit.archive.{TgzFormat, ZipFormat}
 import org.eclipse.jgit.errors.MissingObjectException
 import org.eclipse.jgit.lib._
-import org.eclipse.jgit.treewalk.TreeWalk
+import org.eclipse.jgit.treewalk.{TreeWalk, WorkingTreeOptions}
+import org.eclipse.jgit.treewalk.TreeWalk.OperationType
 import org.eclipse.jgit.treewalk.filter.PathFilter
+import org.eclipse.jgit.util.io.EolStreamTypeUtil
 import org.json4s.jackson.Serialization
 import org.scalatra._
 import org.scalatra.i18n.Messages
@@ -271,9 +274,30 @@ trait RepositoryViewerControllerBase extends ControllerBase {
               if (path.isEmpty) Nil else path.split("/").toList,
               branchName,
               repository,
-              logs.splitWith { (commit1, commit2) =>
-                view.helpers.date(commit1.commitTime) == view.helpers.date(commit2.commitTime)
-              },
+              logs
+                .map {
+                  c =>
+                    CommitInfo(
+                      id = c.id,
+                      shortMessage = c.shortMessage,
+                      fullMessage = c.fullMessage,
+                      parents = c.parents,
+                      authorTime = c.authorTime,
+                      authorName = c.authorName,
+                      authorEmailAddress = c.authorEmailAddress,
+                      commitTime = c.commitTime,
+                      committerName = c.committerName,
+                      committerEmailAddress = c.committerEmailAddress,
+                      commitSign = c.commitSign,
+                      verified = c.commitSign
+                        .flatMap { s =>
+                          GpgUtil.verifySign(s)
+                        }
+                    )
+                }
+                .splitWith { (commit1, commit2) =>
+                  view.helpers.date(commit1.commitTime) == view.helpers.date(commit2.commitTime)
+                },
               page,
               hasNext,
               hasDeveloperRole(repository.owner, repository.name, context.loginAccount),
@@ -975,7 +999,18 @@ trait RepositoryViewerControllerBase extends ControllerBase {
               val entry: ArchiveEntry = entryCreator(entryPath, size, date, mode)
               JGitUtil.openFile(git, repository, commit.getTree, treeWalk.getPathString) { in =>
                 archive.putArchiveEntry(entry)
-                IOUtils.copy(in, archive)
+                IOUtils.copy(
+                  EolStreamTypeUtil.wrapInputStream(
+                    in,
+                    EolStreamTypeUtil
+                      .detectStreamType(
+                        OperationType.CHECKOUT_OP,
+                        git.getRepository.getConfig.get(WorkingTreeOptions.KEY),
+                        treeWalk.getAttributes
+                      )
+                  ),
+                  archive
+                )
                 archive.closeArchiveEntry()
               }
             }
@@ -1000,7 +1035,6 @@ trait RepositoryViewerControllerBase extends ControllerBase {
         using(new ZipArchiveOutputStream(response.getOutputStream)) { zip =>
           archive(revision, ".zip", zip) { (path, size, date, mode) =>
             val entry = new ZipArchiveEntry(path)
-            entry.setSize(size)
             entry.setUnixMode(mode)
             entry.setTime(date.getTime)
             entry
@@ -1025,7 +1059,6 @@ trait RepositoryViewerControllerBase extends ControllerBase {
             tar.setAddPaxHeadersForNonAsciiNames(true)
             archive(revision, ".tar.gz", tar) { (path, size, date, mode) =>
               val entry = new TarArchiveEntry(path)
-              entry.setSize(size)
               entry.setModTime(date)
               entry.setMode(mode)
               entry
